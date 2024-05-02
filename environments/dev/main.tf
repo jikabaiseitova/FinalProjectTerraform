@@ -1,68 +1,64 @@
 locals {
-  max_size          = 4
-  min_size          = 2
-  desired_capacity  = 3
-  instance_type     = "t3.micro"
-  name              = "Jyldyz-dev"
+  ingresses = {
+    22 = "10.1.0.0/16",
+    80 = "0.0.0.0/0"
+  }
 }
 
-module "dev_networking" {
-  source             = "terraform-aws-modules/vpc/aws"
-  name               = "dev-vpc"
-  cidr               = data.terraform_remote_state.finalnetworking.outputs.vpc_cidr_block
-  azs                = data.terraform_remote_state.finalnetworking.outputs.azs
-  private_subnets    = ["10.1.104.0/24", "10.1.105.0/24", "10.1.106.0/24"]
-  public_subnets     = ["10.1.101.0/24", "10.1.102.0/24", "10.1.103.0/24"]
-  enable_nat_gateway = true
-  single_nat_gateway = true
+resource "aws_lb" "alb" {
+  name               = "alb"
+  internal           = false
+  load_balancer_type = "application"
+  subnets            = tolist(toset(data.terraform_remote_state.finalnetworking.outputs.private_subnets))
+  security_groups    = [data.terraform_remote_state.finalautoscaling.outputs.security_group_id]
 }
 
-module "sg_dev" {
-  source             = "terraform-aws-modules/security-group/aws"
-  version            = "5.1.2"
-  name               = "user-service-dev"
-  description        = "security group for dev environment"
-  vpc_id             = module.dev_networking.vpc_id
-  ingress_cidr_blocks = ["0.0.0.0/0"]
-  ingress_rules       = ["https-443-tcp"]
-  ingress_with_cidr_blocks = [
-    {
-      from_port   = 80
-      to_port     = 80
+resource "aws_lb_listener" "alb_listener" {
+  count             = length(var.lb_listener_ports)
+  load_balancer_arn = aws_lb.alb.arn
+  port              = var.lb_listener_ports[count.index]
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg[count.index].arn
+  }
+}
+
+
+variable "lb_listener_ports" {
+  type    = list(number)
+  default =  [80, 443, 22] 
+}
+
+resource "aws_lb_target_group" "tg" {
+  count       = length(var.lb_listener_ports)
+  name_prefix = "tg"
+
+  port        = var.lb_listener_ports[count.index]
+  protocol    = "HTTP"
+  vpc_id      = data.terraform_remote_state.finalnetworking.outputs.vpc_id
+  target_type = "instance"
+}
+
+resource "aws_security_group" "sg" {
+  vpc_id = data.terraform_remote_state.finalnetworking.outputs.vpc_id
+
+  dynamic "ingress" {
+    for_each = local.ingresses
+    content {
+      from_port   = ingress.key
+      to_port     = ingress.key
       protocol    = "tcp"
-      description = "HTTP"
-      cidr_blocks = "0.0.0.0/0"
+      cidr_blocks = [ingress.value]
     }
-  ]
-  tags = {
-    "Name" = "${local.name}-sg-dev"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-module "autoscaling_dev" {
-  source             = "terraform-aws-modules/autoscaling/aws"
-  version            = "7.4.1"
-  name               = "asg-dev"
-  vpc_zone_identifier = module.dev_networking.private_subnets
-  max_size           = local.max_size
-  min_size           = local.min_size
-  desired_capacity   = local.desired_capacity
-  image_id           = data.aws_ami.ami.id
-  instance_type      = local.instance_type
-  security_groups    = [module.sg_dev.security_group_id]
-
-  tags = {
-    "Name" = "${local.name}-asg-dev"
-  }
-  
-  user_data = filebase64("${path.module}/script.sh")
-}
-
-module "alb" {
-  source             = "terraform-aws-modules/alb/aws"
-  version            = "9.9.0"
-  name_prefix        = "my"
-  subnets            = module.dev_networking.private_subnets
-  vpc_id             = module.dev_networking.vpc_id
-  security_groups    = [module.sg_dev.security_group_id]
-}

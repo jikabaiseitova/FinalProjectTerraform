@@ -6,9 +6,18 @@ terraform {
   }
 }
 
+data "terraform_remote_state" "finalautoscaling" {
+  backend   = "s3"
+  config    = {
+    bucket  = "terraform.tfstate-jyldyz"
+    key     = "finalautoscaling/terraform.tfstate"
+    region  = "us-east-1"
+  }
+}
+
 data "terraform_remote_state" "finalnetworking" {
-  backend = "s3"
-  config = {
+  backend   = "s3"
+  config    = {
     bucket  = "terraform.tfstate-jyldyz"
     key     = "finalnetworking/terraform.tfstate"
     region  = "us-east-1"

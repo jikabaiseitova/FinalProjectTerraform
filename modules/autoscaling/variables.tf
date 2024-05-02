@@ -27,3 +27,9 @@ variable "user_specified_ami" {
   description = "User-specified AMI for launch template"
   default     = ""
 }
+
+variable "name_prefix" {
+  type    = string
+  default = "my"
+}
+
